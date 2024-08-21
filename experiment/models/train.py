@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 def batch_run_vae(model, x):
   # single batch run
   out = model(x)
-  loss = model.overall_loss(x, out["x_hat"], out["z_mean"], out["z_logvar"])
+  loss = model.overall_loss(x, out["x_hat"], out["z_m"], out["z_lv"])
   return loss
 
 def batch_run_cvae(model, x):
@@ -12,9 +12,9 @@ def batch_run_cvae(model, x):
   tg, bg = x[:,0,:], x[:,1,:]
   out = model(tg, bg)
   loss = model.overall_loss(tg, out["tg_outputs"], bg, out["bg_outputs"], 
-                            out["tg_z"], out["tg_z_mean"], out["tg_z_logvar"], 
-                            out["tg_s"], out["tg_s_mean"], out["tg_s_logvar"],
-                            out["bg_z"], out["bg_z_mean"], out["bg_z_logvar"])
+                            out["tg_z"], out["tg_z_m"], out["tg_z_lv"], 
+                            out["tg_s"], out["tg_s_m"], out["tg_s_lv"],
+                            out["bg_z"], out["bg_z_m"], out["bg_z_lv"])
   return loss
 
 def train(model, dataloader, optimizer, epochs=50, plot=True):

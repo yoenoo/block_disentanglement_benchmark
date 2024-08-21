@@ -6,12 +6,12 @@ class Encoder(nn.Module):
   def __init__(self, input_dim, hidden_dim, latent_dim, use_bias=False):
     super().__init__()
     self.input_layer = nn.Linear(input_dim, hidden_dim, bias=use_bias)
-    self.z_mean_layer = nn.Linear(hidden_dim, latent_dim, bias=use_bias)
-    self.z_logvar_layer = nn.Linear(hidden_dim, latent_dim, bias=use_bias)
+    self.z_m_layer = nn.Linear(hidden_dim, latent_dim, bias=use_bias)
+    self.z_lv_layer = nn.Linear(hidden_dim, latent_dim, bias=use_bias)
         
-  def reparametrize(self, mean, logvar):
-    eps = torch.randn_like(logvar)
-    return mean + eps * torch.exp(logvar/2.)
+  def reparametrize(self, m, lv):
+    eps = torch.randn_like(lv)
+    return m + eps * torch.exp(lv/2.)
 
   def forward(self, x):
     x = self.input_layer(x)
@@ -41,12 +41,9 @@ class VAE(nn.Module):
     self.name = "VAE"
     
   def forward(self, x):
-    z, z_mean, z_logvar = self.encoder(x)
+    z, z_m, z_lv = self.encoder(x)
     x_hat = self.decoder(z)
-    return {"z": z, 
-            "z_mean": z_mean, 
-            "z_logvar": z_logvar, 
-            "x_hat": x_hat}
+    return dict(z=z, z_m=z_m, z_lv=z_lv, x_hat=x_hat)
 
   def reconstruction_loss(self, inputs, outputs):
     rec_loss = torch.sum(F.mse_loss(inputs, outputs, reduction="none"), axis=1) # sum over pixels
@@ -60,6 +57,4 @@ class VAE(nn.Module):
     reconstruction_loss = self.reconstruction_loss(x, xhat)
     kl_loss = self.kl_loss(z_mean, z_logvar)
     overall_loss = reconstruction_loss + self.beta * kl_loss
-    return {"reconstruction_loss": reconstruction_loss, 
-            "kl_loss": kl_loss, 
-            "overall_loss": overall_loss}
+    return dict(reconstruciton_loss=reconstruction_loss, kl_loss=kl_loss, overall_loss=overall_loss)
