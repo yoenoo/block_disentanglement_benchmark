@@ -17,7 +17,7 @@ def batch_run_cvae(model, x):
                             out["bg_z"], out["bg_z_m"], out["bg_z_lv"])
   return loss
 
-def train(model, dataloader, optimizer, epochs=50, plot=True):
+def train(model, dataloader, optimizer, epochs=50, plot=False, verbose=0):
   model.train()
 
   losses = []
@@ -34,6 +34,9 @@ def train(model, dataloader, optimizer, epochs=50, plot=True):
       losses.append(loss)
       loss["overall_loss"].backward()
       optimizer.step()
+
+    if verbose > 0: 
+      print(f"Epoch: {epoch}, loss: {loss['overall_loss']:.4f}")
 
   if plot:
     _, axes = plt.subplots(ncols=len(loss), figsize=(15,3)) 
