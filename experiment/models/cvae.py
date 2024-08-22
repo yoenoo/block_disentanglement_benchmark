@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class Encoder(nn.Module):
+class MLPEncoder(nn.Module):
   def __init__(self, input_dim, hidden_dim, latent_dim, use_bias=False):
     super().__init__()
     self.input_layer = nn.Linear(input_dim, hidden_dim, bias=use_bias)
@@ -21,7 +21,7 @@ class Encoder(nn.Module):
     z = self.reparametrize(z_m, z_lv)
     return z, z_m, z_lv
 
-class Decoder(nn.Module):
+class MLPDecoder(nn.Module):
   def __init__(self, input_dim, hidden_dim, latent_dim, use_bias=False):
     super().__init__()
     self.latent_layer = nn.Linear(2*latent_dim, hidden_dim, bias=use_bias)
@@ -44,13 +44,72 @@ class Discriminator(nn.Module):
     x = self.sigmoid(x)
     return x
 
+class ConvEncoder(nn.Module):
+  def __init__(self, input_dim, hidden_dim, latent_dim, use_bias=False, **conv_kwargs):
+    super().__init__()
+    self.conv1 = nn.Conv2d(in_channels=1, out_channels=hidden_dim, bias=use_bias, **conv_kwargs)
+    self.conv2 = nn.Conv2d(in_channels=hidden_dim, out_channels=2*hidden_dim, bias=use_bias, **conv_kwargs)
+
+    # TODO: can take 4*hidden_dim or through function argument
+    self.h_layer = nn.Linear(2*hidden_dim, 4*hidden_dim, bias=use_bias)
+    self.z_m_layer = nn.Linear(4*hidden_dim, latent_dim, bias=use_bias)
+    self.z_lv_layer = nn.Linear(4*hidden_dim, latent_dim, bias=use_bias)
+    
+  def reparametrize(self, m, lv):
+    eps = torch.randn_like(lv)
+    return m + eps * torch.exp(lv/2.)
+    
+  def forward(self, x):
+    z = self.conv1(x)
+    z = F.relu(z)
+    
+    z = self.conv2(z)
+    z = F.relu(z)
+
+    z = z.permute(0,2,3,1) # reorder axes
+    z = self.h_layer(z)
+    z = F.relu(z)
+    
+    z_m, z_lv = self.z_m_layer(z), self.z_lv_layer(z)
+    z = self.reparametrize(z_m, z_lv)
+    return z, z_m, z_lv
+
+class ConvDecoder(nn.Module):
+  def __init__(self, input_dim, hidden_dim, latent_dim, use_bias=False, **conv_kwargs):
+    super().__init__()
+    self.h_layer = nn.Linear(2*latent_dim, 4*hidden_dim, bias=use_bias)
+    self.conv1_t = nn.ConvTranspose2d(in_channels=4*hidden_dim, out_channels=2*hidden_dim, bias=use_bias, 
+                                      output_padding=1, **conv_kwargs)
+    self.conv2_t = nn.ConvTranspose2d(in_channels=2*hidden_dim, out_channels=hidden_dim, bias=use_bias, 
+                                      output_padding=1, **conv_kwargs)
+    
+    ks = conv_kwargs["kernel_size"]
+    assert ks % 2 == 1, f"requires odd kernel size, instead got {ks}"
+    padding = int((ks-1) / 2) # i.e. "same"
+    self.conv_out_t = nn.ConvTranspose2d(in_channels=hidden_dim, out_channels=1, bias=use_bias, 
+                                         kernel_size=ks, padding=padding)
+
+  def forward(self, x):
+    x = self.h_layer(x)
+    
+    x = x.permute(0,3,1,2) # reorder axes
+    x = self.conv1_t(x)
+    x = F.relu(x)
+
+    x = self.conv2_t(x)
+    x = F.relu(x)
+
+    x = self.conv_out_t(x)
+    # x = nn.Sigmoid(x) # TODO
+    return x
+
 class ContrastiveVAE(nn.Module):
-  def __init__(self, input_dim, hidden_dim, latent_dim, use_bias=False, beta=1, regularizer="tc", penalty=1):
+  def __init__(self, Encoder, Decoder, input_dim, hidden_dim, latent_dim, use_bias=False, beta=1, regularizer=None, penalty=1, **kwargs):
     super().__init__()
 
-    self.z_encoder = Encoder(input_dim, hidden_dim, latent_dim, use_bias=use_bias)
-    self.s_encoder = Encoder(input_dim, hidden_dim, latent_dim, use_bias=use_bias)
-    self.decoder = Decoder(input_dim, hidden_dim, latent_dim, use_bias=use_bias)
+    self.z_encoder = Encoder(input_dim, hidden_dim, latent_dim, use_bias=use_bias, **kwargs)
+    self.s_encoder = Encoder(input_dim, hidden_dim, latent_dim, use_bias=use_bias, **kwargs)
+    self.decoder = Decoder(input_dim, hidden_dim, latent_dim, use_bias=use_bias, **kwargs)
     self.discriminator = Discriminator(latent_dim)
 
     self.name = "cVAE"
@@ -64,13 +123,13 @@ class ContrastiveVAE(nn.Module):
     tg_s, tg_s_m, tg_s_lv = self.s_encoder(tg)
     bg_z, bg_z_m, bg_z_lv = self.z_encoder(bg)
 
-    tg_outputs = self.decoder(torch.cat([tg_z, tg_s], dim=1))
+    tg_outputs = self.decoder(torch.cat([tg_z, tg_s], dim=-1))
     zeros = torch.zeros_like(tg_z)
-    bg_outputs = self.decoder(torch.cat([bg_z, zeros], dim=1)) # bg means s = 0
+    bg_outputs = self.decoder(torch.cat([bg_z, zeros], dim=-1)) # bg means s = 0
     
     # NOTE: fg_outputs not used in model training... for model inspection purpose...
     # fg_outputs = self.decoder(torch.cat([tg_z, zeros], dim=1)) -- from the official code
-    fg_outputs = self.decoder(torch.cat([zeros, tg_s], dim=1))
+    fg_outputs = self.decoder(torch.cat([zeros, tg_s], dim=-1))
 
     return dict(
       tg_outputs=tg_outputs, bg_outputs=bg_outputs, fg_outputs=fg_outputs,
