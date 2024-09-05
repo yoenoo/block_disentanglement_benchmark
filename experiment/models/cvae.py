@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from .regularizer import get_hsic, get_cka
 
 class MLPEncoder(nn.Module):
   def __init__(self, input_dim, hidden_dim, latent_dim, use_bias=False):
@@ -104,7 +104,7 @@ class ConvDecoder(nn.Module):
     return x
 
 class ContrastiveVAE(nn.Module):
-  def __init__(self, Encoder, Decoder, input_dim, hidden_dim, latent_dim, use_bias=False, beta=1, regularizer=None, penalty=1, **kwargs):
+  def __init__(self, Encoder, Decoder, input_dim, hidden_dim, latent_dim, use_bias=False, gamma=1, beta=1, regularizer=None, penalty=1, **kwargs):
     super().__init__()
 
     self.z_encoder = Encoder(input_dim, hidden_dim, latent_dim, use_bias=use_bias, **kwargs)
@@ -113,6 +113,7 @@ class ContrastiveVAE(nn.Module):
     self.discriminator = Discriminator(latent_dim)
 
     self.name = "cVAE"
+    self.gamma = gamma
     self.beta = beta
     self.regularizer = regularizer
     self.penalty = penalty
@@ -179,15 +180,38 @@ class ContrastiveVAE(nn.Module):
     dist = torch.cdist(X, X, p=2).pow(2)
     return torch.div(-dist, 2*sigma**2).exp()
       
-  def HSIC_loss(self, s_m, z_m):
-    n = s_m.shape[0]
-    K = self._rbf_kernel(s_m)
-    L = self._rbf_kernel(z_m)
+  def HSIC_loss(self, s, z):
+    # this doesn't work
+    return get_hsic(s, z, center=True, gamma=self.gamma)[0]
 
-    t1 = 1 / n**2 * torch.sum(K*L)
-    t2 = 1 / n**4 * torch.sum(K) * torch.sum(L)
-    t3 = 2 / n**3 * torch.sum(K@L)
-    return t1 + t2 - t3
+  def CKA_loss(self, s, z):
+    return get_cka(s, z, gamma=self.gamma)
+      
+  # def HSIC_loss(self, s_m, z_m):
+  #   import sys; sys.path.append("../pysim")
+  #   from pysim.pysim.kernel.hsic import HSIC
+
+  #   hsic_clf = HSIC(center=True, kernel="rbf", gamma_X=1e-6, gamma_Y=1e-6)
+  #   s_m = standardize(s_m)
+  #   z_m = standardize(z_m)
+  #   hsic_clf.fit(s_m.detach().numpy(), z_m.detach().numpy())
+  #   hsic_score = hsic_clf.hsic_value
+  #   # cka_score = hsic_clf.score(s_m.detach().numpy(), normalize=True)
+  #   # cka_score = hsic_clf.score(s_m.detach().numpy(), normalize=False)
+  #   # return torch.tensor(cka_score)
+  #   return torch.tensor(hsic_score)
+
+  # def HSIC_loss(self, s_m, z_m):
+  #   n = s_m.shape[0]
+  #   s_m = standardize(s_m)
+  #   z_m = standardize(z_m)
+  #   K = self._rbf_kernel(s_m, sigma=3.)
+  #   L = self._rbf_kernel(z_m, sigma=3.)
+
+  #   t1 = 1 / n**2 * torch.sum(K*L)
+  #   t2 = 1 / n**4 * torch.sum(K) * torch.sum(L)
+  #   t3 = 2 / n**3 * torch.sum(K@L)
+  #   return t1 + t2 - t3
 
   def MMD_loss(self, s_m, z_m):
     K = self._rbf_kernel(s_m)
@@ -218,15 +242,23 @@ class ContrastiveVAE(nn.Module):
       # w_loss = self.wasserstein_loss(bg_s_m, bg_s_lv) # -- from original code
       reg_loss = w_loss
     elif self.regularizer == "HSIC":
-      hsic_loss = self.HSIC_loss(tg_s_m, tg_z_m)
+      # hsic_loss = self.CKA_loss(tg_s_m, tg_z_m) + self.CKA_loss(tg_s_lv, tg_z_lv)
+      # hsic_loss = self.HSIC_loss(tg_s, tg_z)
+      hsic_loss = self.CKA_loss(tg_s, tg_z)
       reg_loss = hsic_loss
     elif self.regularizer == "MMD":
       mmd_loss = self.MMD_loss(tg_s_m, tg_z_m)
       reg_loss = mmd_loss
     elif self.regularizer is None:
-      reg_loss = torch.tensor([0])
+      reg_loss = torch.tensor(0)
     else:
       raise ValueError(f"invalid regularizer: {self.regularizer}")
 
     overall_loss = reconst_loss + self.beta * kl_loss + self.penalty * reg_loss
-    return dict(reconstruction_loss=reconst_loss, kl_loss=kl_loss, reg_loss=reg_loss, overall_loss=overall_loss)
+    return dict(reconstruction_loss=reconst_loss, 
+                kl_loss_tg_z=kl_loss_tg_z,
+                kl_loss_tg_s=kl_loss_tg_s,
+                kl_loss_bg_z=kl_loss_bg_z,
+                kl_loss=kl_loss, 
+                reg_loss=reg_loss, 
+                overall_loss=overall_loss)
